@@ -1,0 +1,17 @@
+# Grafana contact point for FlagScope's Flagsmith Feature Health alerts.
+#
+# It posts to the gatekeeper relay, NOT to the Flagsmith webhook URL: that URL carries a secret, and in Grafana 13 every
+# Viewer (anonymous ones too) can read contact point settings through the API, with no way to turn that off in OSS.
+# The gatekeeper holds the secret path (bootstrap writes it to a file only the gatekeeper can read) and forwards the
+# alert JSON to Flagsmith. Because the URL is now static and secret-free, the contact point can live in a file, so it
+# exists before the alert rule that routes to it (Grafana refuses a rule whose receiver does not exist yet).
+apiVersion: 1
+contactPoints:
+  - orgId: 1
+    name: flagsmith-feature-health
+    receivers:
+      - uid: flagscope-feature-health
+        type: webhook
+        settings:
+          url: http://gatekeeper:8080/hooks/feature-health
+          httpMethod: POST

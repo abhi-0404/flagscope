@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
-import { judge, createServer, makeKeySource, RULES, MAX_BODY_BYTES } from './gatekeeper.mjs';
+import { judge, createServer, makeKeySource, RULES, MAX_BODY_BYTES, MAX_HOOK_BYTES, HOOK_PATH } from './gatekeeper.mjs';
 
 const K = 'Rg3rZaBcDeFgHiJkLmNoPq'; // shaped like an environment API key
 const EXP = `/api/v1/environments/${K}/experiments`;
@@ -126,6 +126,12 @@ const DENIED = [
   ['GET', '/api/v1/projects/?PAGE=1'],
   ['GET', `${EXP}/7/results/;refresh/`],
   ['GET', `/api/v1/environments/ser.${K}/experiments/`],
+  // the Feature Health relay is not part of the plugin allow-list (it has its own handler, exact path, POST only)
+  ['GET', '/hooks/feature-health'],
+  ['POST', '/hooks/feature-health'],
+  ['POST', '/hooks/feature-health/'],
+  ['POST', '/api/v1/feature-health/abc/def'],
+  ['GET', '/api/v1/feature-health/abc/def'],
   ['CONNECT', '/api/v1/projects/'],
   ['TRACE', '/version/'],
   // absurd length
@@ -419,4 +425,98 @@ test('the master key never appears in a response, even when upstream echoes requ
     gate.closeAllConnections?.();
     upstream.closeAllConnections?.();
   }
+});
+
+// ---------- Feature Health relay: POST /hooks/feature-health ----------
+const SECRET_PATH = '/api/v1/feature-health/WZWxsby/sEcReT-tOkEn_123';
+const ALERT = JSON.stringify({ status: 'firing', alerts: [{ status: 'firing', labels: { flagsmith_feature: 'paypal_button' } }] });
+
+async function withHook(fn, { hookPath = SECRET_PATH, status = 200 } = {}) {
+  const seen = [];
+  const upstream = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      seen.push({ method: req.method, url: req.url, headers: req.headers, body });
+      res.writeHead(status, { 'content-type': 'application/json' }).end('{"ok":true}');
+    });
+  });
+  const upPort = await listen(upstream);
+  const logs = [];
+  const gate = createServer({
+    upstream: `http://127.0.0.1:${upPort}`,
+    getKey: () => 'MASTERKEY123',
+    getHookPath: () => hookPath,
+    log: (...a) => logs.push(a.join(' ')),
+  });
+  const port = await listen(gate);
+  try {
+    await fn({ port, seen, logs });
+  } finally {
+    gate.close();
+    upstream.close();
+    gate.closeAllConnections?.();
+    upstream.closeAllConnections?.();
+  }
+}
+
+test('the hook relays the alert JSON to the secret Feature Health path, without any key or client header', async () => {
+  await withHook(async ({ port, seen, logs }) => {
+    const r = await call(port, 'POST', HOOK_PATH, { 'content-type': 'application/json', authorization: 'Bearer X', cookie: 'a=b' }, ALERT);
+    assert.equal(r.status, 200);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].method, 'POST');
+    assert.equal(seen[0].url, SECRET_PATH);
+    assert.equal(seen[0].body, ALERT);
+    assert.equal(seen[0].headers.authorization, undefined, 'neither the client nor the master key is sent');
+    assert.equal(seen[0].headers.cookie, undefined);
+    assert.equal(seen[0].headers['content-length'], String(Buffer.byteLength(ALERT)));
+    assert.deepEqual(logs, [`POST ${HOOK_PATH} 200`]);
+    assert.ok(!logs.join('').includes('sEcReT'), 'the secret path is never logged');
+    assert.ok(!JSON.stringify(r).includes('sEcReT'));
+  });
+});
+
+test('the hook passes the upstream status through (Flagsmith 400 for a malformed payload)', async () => {
+  await withHook(async ({ port }) => {
+    assert.equal((await call(port, 'POST', HOOK_PATH, { 'content-type': 'application/json; charset=utf-8' }, '{}')).status, 400);
+  }, { status: 400 });
+});
+
+test('the hook needs JSON, an exact path and a valid configured target', async () => {
+  await withHook(async ({ port, seen }) => {
+    assert.equal((await call(port, 'POST', HOOK_PATH, { 'content-type': 'text/plain' }, ALERT)).status, 415);
+    assert.equal((await call(port, 'POST', HOOK_PATH, {}, ALERT)).status, 415);
+    assert.equal((await call(port, 'POST', `${HOOK_PATH}?x=1`, { 'content-type': 'application/json' }, ALERT)).status, 403);
+    assert.equal((await call(port, 'GET', HOOK_PATH)).status, 403);
+    assert.equal((await call(port, 'PUT', HOOK_PATH, { 'content-type': 'application/json' }, ALERT)).status, 403);
+    assert.equal(seen.length, 0);
+  });
+  for (const bad of ['', '/api/v1/projects/1/', '/api/v1/feature-health/a/b/../../../x', '/api/v1/feature-health/a/b?x=1', 'http://evil.example/x']) {
+    await withHook(async ({ port, seen }) => {
+      assert.equal((await call(port, 'POST', HOOK_PATH, { 'content-type': 'application/json' }, ALERT)).status, 503, bad);
+      assert.equal(seen.length, 0);
+    }, { hookPath: bad });
+  }
+});
+
+test('the hook cuts off a body over the limit and never reaches upstream', async () => {
+  await withHook(async ({ port, seen }) => {
+    const big = JSON.stringify({ pad: 'x'.repeat(MAX_HOOK_BYTES + 1024) });
+    await assert.rejects(call(port, 'POST', HOOK_PATH, { 'content-type': 'application/json' }, big));
+    assert.equal(seen.length, 0);
+    const ok = await call(port, 'POST', HOOK_PATH, { 'content-type': 'application/json' }, ALERT);
+    assert.equal(ok.status, 200, 'the proxy is still alive');
+  });
+});
+
+test('the hook feature health target is read from a file when it changes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gk-hook-'));
+  const file = path.join(dir, 'feature-health-path');
+  const get = makeKeySource({ file });
+  assert.equal(get(), '');
+  fs.writeFileSync(file, `${SECRET_PATH}
+`);
+  assert.equal(get(), SECRET_PATH);
+  fs.rmSync(dir, { recursive: true });
 });

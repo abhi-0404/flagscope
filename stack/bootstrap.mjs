@@ -6,7 +6,8 @@
 // Gatekeeper: the master key goes into /generated/gatekeeper/master-key, read only by the gatekeeper container.
 // Grafana:   service account + token -> FlagScope data source (points at the gatekeeper, holds NO Flagsmith key)
 //            -> PostgreSQL data source (read-only role) -> Flagsmith Grafana integration -> Feature Health provider
-//            -> Grafana contact point that posts to it. The Experiment Room dashboard is provisioned from files.
+//            -> the secret webhook path goes to the gatekeeper relay. The Experiment Room dashboard, the contact point and the
+//            SRM alert rule are provisioned from files (stack/grafana/provisioning).
 // Secrets live in /generated/state.json and /generated/credentials.txt (gitignored) and are never printed.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -37,6 +38,7 @@ const NAMES = {
   masterKey: 'flagscope-admin',
   serviceAccount: 'flagsmith',
   contactPoint: 'flagsmith-feature-health',
+  contactPointUid: 'flagscope-feature-health',
 };
 const UID = { flagscope: 'flagscope', postgres: 'flagscope-postgres' };
 const PLUGIN_ID = 'abhi0404-flagscope-datasource';
@@ -366,21 +368,30 @@ async function bootstrapGrafana({ api, P }) {
     provider = (await fs_('POST', `${P}/feature-health/providers/`, { auth: api, body: { name: 'Grafana' } })).json;
     did('flagsmith', 'Feature Health provider "Grafana"');
   } else ok('flagsmith', 'Feature Health provider "Grafana"');
-  const hookUrl = `${FLAGSMITH_FOR_GRAFANA}${new URL(provider.webhook_url).pathname}`;
+  // The Feature Health webhook URL carries a secret, and a Grafana contact point URL is readable by every Grafana
+  // Viewer (anonymous ones too; OSS cannot restrict that). So the secret path goes to the gatekeeper only (a file in the
+  // folder only it can read) and the contact point posts to the gatekeeper relay, which holds no secret in Grafana.
+  const hookPath = new URL(provider.webhook_url).pathname;
+  if (!/^\/api\/v1\/feature-health\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(hookPath)) throw new Error('unexpected Feature Health webhook path shape');
+  if (writeIfChanged(path.join(gatekeeperDir, 'feature-health-path'), hookPath + '\n')) did('gatekeeper', 'Feature Health webhook path stored for the relay');
+  else ok('gatekeeper', 'Feature Health webhook path');
+  // The contact point itself is provisioned from stack/grafana/provisioning/alerting/contact-point.yaml (uid below). An
+  // earlier bootstrap created one through the API whose URL held the secret: drop it, so no secret is left in Grafana.
   const points = (await g('GET', '/api/v1/provisioning/contact-points')).json ?? [];
-  const point = points.find((c) => c.name === NAMES.contactPoint);
-  if (!point) {
-    await g('POST', '/api/v1/provisioning/contact-points', { body: { name: NAMES.contactPoint, type: 'webhook', settings: { url: hookUrl, httpMethod: 'POST' } } });
-    did('grafana', `contact point ${NAMES.contactPoint}`);
-  } else if (point.settings?.url !== hookUrl) {
-    await g('PUT', `/api/v1/provisioning/contact-points/${point.uid}`, { body: { name: NAMES.contactPoint, type: 'webhook', settings: { url: hookUrl, httpMethod: 'POST' } } });
-    did('grafana', `contact point ${NAMES.contactPoint} updated`);
-  } else ok('grafana', `contact point ${NAMES.contactPoint}`);
+  const legacy = points.filter((c) => c.name === NAMES.contactPoint && c.uid !== NAMES.contactPointUid);
+  for (const c of legacy) {
+    await g('DELETE', `/api/v1/provisioning/contact-points/${c.uid}`);
+    did('grafana', `removed the old API-created contact point ${NAMES.contactPoint} (its URL held the webhook secret)`);
+  }
+  const point = points.find((c) => c.uid === NAMES.contactPointUid);
+  if (!point) throw new Error(`contact point ${NAMES.contactPointUid} not provisioned; recreate Grafana: docker compose up -d grafana`);
+  ok('grafana', `contact point ${NAMES.contactPoint} (provisioned, posts to the gatekeeper relay)`);
+  return { hookPath };
 }
 
 // Same calls the plugin's "Save & test" makes, but through Grafana's data proxy and the gatekeeper, so the key held by
 // the gatekeeper is proven too. Then one path the plugin never uses must be refused with 403 (the allow-list at work).
-async function smokeTest() {
+async function smokeTest(hookPath) {
   const proxy = (p) => `/api/datasources/proxy/uid/${UID.flagscope}/flagsmith${p}`;
   const v = (await waitFor('FlagScope data source via the gatekeeper', async () => (await g('GET', SMOKE_VERSION_PATH)).json)) ?? {};
   if (!v.experimentation_enabled) throw new Error('FlagScope data source proxy: /version/ did not report experimentation_enabled');
@@ -390,6 +401,16 @@ async function smokeTest() {
   if (denied.status !== 403) throw new Error(`gatekeeper allow-list: GET .../identities/ answered ${denied.status}, expected 403`);
   const pg = (await g('GET', `/api/datasources/uid/${UID.postgres}/health`, { expect: 'any' })).json;
   if (pg?.status !== 'OK') throw new Error(`PostgreSQL data source health: ${pg?.message ?? 'not OK'}`);
+  // The alert rule comes from stack/grafana/provisioning/alerting; it must exist and the Feature Health webhook secret
+  // must not be readable by anonymous Viewers (they can list contact points in Grafana 13).
+  const rule = await g('GET', '/api/v1/provisioning/alert-rules/flagscope-srm-feature-health', { expect: 'any' });
+  if (rule.status !== 200) throw new Error(`alert rule flagscope-srm-feature-health not provisioned (HTTP ${rule.status}); recreate Grafana: docker compose up -d grafana`);
+  const anon = await http(GRAFANA, 'GET', '/api/v1/provisioning/contact-points', { expect: 'any' });
+  if (anon.status === 200) {
+    const secret = hookPath.split('/').pop();
+    if (JSON.stringify(anon.json).includes(secret)) throw new Error('an anonymous Viewer can read the Feature Health webhook secret from the contact point');
+    log('verify', 'anonymous Viewers can list the contact point but it holds no Feature Health secret');
+  }
   log('verify', `FlagScope data source OK (Flagsmith ${v.image_tag}, ${projects.length} project), PostgreSQL data source OK`);
 }
 
@@ -418,8 +439,8 @@ function credentialsText() {
 
 try {
   const ctx = await bootstrapFlagsmith();
-  await bootstrapGrafana(ctx);
-  await smokeTest();
+  const { hookPath } = await bootstrapGrafana(ctx);
+  await smokeTest(hookPath);
   if (saveState()) changes++;
   if (writeIfChanged(credsPath, credentialsText())) log('files', `wrote ${path.basename(credsPath)}`);
   fs.writeFileSync(doneMarker, new Date().toISOString());

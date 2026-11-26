@@ -205,3 +205,9 @@ pnpm typecheck; pnpm lint; pnpm test:ci     # never `pnpm test` (watch mode)
   - With no allocation found at all, the tables leave `expected` and `chi_square` empty instead of marking every variant "(not in plan)".
   - The metadata regex also accepts spaces before the colon (`"experiment_id" : 7`).
   - Checked against the stack data in rolled-back transactions, including as a temporary read-only role with the `01-readonly.sql` grants; the planner still uses `sdk_exp_event_feature_idx` with the `timestamp >= started_at` range.
+
+## Session of Nov 26 (evening)
+- `plugin/tests/dashboard.test.ts` updated for the shared SRM `verdict` CTE (stat, bar gauge and table panels; states: no exposures,
+  plan unavailable = 2, SRM = 1, OK = 0) and a new test that the stat panel maps all four states. Plugin 66/66 pass, typecheck clean,
+  gatekeeper 24/24 pass.
+- Still uncommitted (not pushed): bootstrap.mjs, docker-compose.yml, gatekeeper, dashboard JSON, provisioning/alerting/, this test.

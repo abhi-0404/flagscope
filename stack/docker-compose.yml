@@ -130,6 +130,9 @@ services:
     environment:
       UPSTREAM_URL: http://flagsmith:8000
       MASTER_KEY_FILE: /secrets/master-key
+      # Secret Feature Health webhook path (bootstrap writes it). Grafana's alert contact point posts to
+      # http://gatekeeper:8080/hooks/feature-health instead, so the secret never sits in a Grafana contact point.
+      FEATURE_HEALTH_PATH_FILE: /secrets/feature-health-path
       PORT: '8080'
     read_only: true
     cap_drop:
@@ -149,8 +152,8 @@ services:
       flagsmith:
         condition: service_healthy
 
-  # FlagScope addition: Grafana OSS with the FlagScope plugin dist mounted (unsigned plugin allowed) and the
-  # Experiment Room dashboard provisioned. Anonymous access is enabled as Viewer for the demo: safe here because the
+  # FlagScope addition: Grafana OSS with the FlagScope plugin dist mounted (unsigned plugin allowed), the
+  # Experiment Room dashboard and the SRM alert rule provisioned. Anonymous access is enabled as Viewer for the demo: safe here because the
   # FlagScope data source only reaches Flagsmith through the gatekeeper, and results refresh stays Admin-only.
   grafana:
     image: grafana/grafana:13.2.7
@@ -176,6 +179,7 @@ services:
     volumes:
       - ../plugin/dist:/var/lib/grafana/plugins/abhi0404-flagscope-datasource:ro
       - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/provisioning/alerting:/etc/grafana/provisioning/alerting:ro
       - ./grafana/dashboards:/etc/flagscope/dashboards:ro
       - grafana-data:/var/lib/grafana
     healthcheck:

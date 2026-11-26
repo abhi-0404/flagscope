@@ -1,0 +1,142 @@
+# FlagScope alert: sample ratio mismatch (SRM) on the bundled paypal_button experiment -> Flagsmith Feature Health.
+#
+# The query is the SRM stat of the Experiment Room (panel 6, see docs/events-sql.md Query 2) with two changes: the
+# experiment is resolved in SQL (the running experiment of feature paypal_button in the Development environment,
+# because an alert cannot read a dashboard variable) and the result is 1 only for "SRM DETECTED" (0 for Split OK,
+# No exposures yet and Plan unavailable). plugin/tests/alerting.test.ts keeps it identical to the panel.
+#
+# Firing posts a Grafana webhook to the contact point flagsmith-feature-health (created by bootstrap.mjs, it posts to
+# the gatekeeper relay), Flagsmith marks the feature paypal_button Unhealthy in Development. Resolved marks it Healthy.
+# labels.flagsmith_feature is the feature name, labels.flagsmith_environment the environment NAME (not its key).
+#
+# To watch another feature or environment, change the two names in the SQL, the two labels and the title together.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: flagscope-srm
+    folder: FlagScope
+    interval: 20s
+    rules:
+      - uid: flagscope-srm-feature-health
+        title: SRM on paypal_button
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: flagscope-postgres
+            model:
+              refId: A
+              datasource:
+                type: grafana-postgresql-datasource
+                uid: flagscope-postgres
+              editorMode: code
+              format: table
+              rawQuery: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              rawSql: |
+                WITH exp AS (
+                  SELECT env.api_key, f.name AS feature_name, f.initial_value AS control_value,
+                         e.feature_id, e.environment_id, e.rollout_segment_id,
+                         e.id AS experiment_id, e.started_at, e.ended_at
+                  FROM experimentation_experiment e
+                  JOIN environments_environment env ON env.id = e.environment_id
+                  JOIN features_feature f ON f.id = e.feature_id
+                  WHERE e.id = (
+                    SELECT max(x.id) FROM experimentation_experiment x
+                    JOIN features_feature xf ON xf.id = x.feature_id
+                    JOIN environments_environment xe ON xe.id = x.environment_id
+                    WHERE xf.name = 'paypal_button' AND xe.name = 'Development' AND x.status = 'running' AND x.deleted_at IS NULL
+                  )
+                ),
+                alloc AS (
+                  SELECT mo.string_value AS variant, mv.percentage_allocation::numeric / 100 AS p
+                  FROM exp e
+                  JOIN features_featuresegment fsg ON fsg.segment_id = e.rollout_segment_id
+                       AND fsg.feature_id = e.feature_id AND fsg.environment_id = e.environment_id
+                  JOIN features_featurestate fs ON fs.feature_segment_id = fsg.id AND fs.deleted_at IS NULL
+                  JOIN multivariate_multivariatefeaturestatevalue mv ON mv.feature_state_id = fs.id
+                  JOIN multivariate_multivariatefeatureoption mo ON mo.id = mv.multivariate_feature_option_id
+                ),
+                expected AS (
+                  SELECT COALESCE(NULLIF(variant, ''), '(empty)') AS variant, p FROM alloc
+                  UNION ALL
+                  SELECT COALESCE(NULLIF((SELECT control_value FROM exp), ''), '(empty)'), 1 - COALESCE(SUM(p), 0) FROM alloc
+                ),
+                first_exposure AS (
+                  SELECT DISTINCT ON (s.identifier) s.identifier, s.value AS variant, s."timestamp" AS exposed_at
+                  FROM experimentation_sdkexperimentationevent s
+                  JOIN exp ON s.environment_key = exp.api_key AND s.feature_name = exp.feature_name
+                  WHERE s.event = chr(36) || 'flag_exposure'
+                    AND s."timestamp" >= exp.started_at
+                    AND (exp.ended_at IS NULL OR s."timestamp" <= exp.ended_at)
+                    AND COALESCE(substring(s.metadata from '"experiment_id" *: *"?([0-9]+)'), exp.experiment_id::text) = exp.experiment_id::text
+                  ORDER BY s.identifier, s."timestamp"
+                ),
+                observed AS (SELECT COALESCE(NULLIF(variant, ''), '(empty)') AS variant, count(*)::float AS o FROM first_exposure GROUP BY 1),
+                joined AS (
+                  SELECT variant, COALESCE(o.o, 0) AS observed, COALESCE(x.p, 0) AS p,
+                         SUM(COALESCE(o.o, 0)) OVER () * COALESCE(x.p, 0) AS expected,
+                         SUM(COALESCE(o.o, 0)) OVER () AS total
+                  FROM expected x FULL JOIN observed o USING (variant)
+                ),
+                stat AS (
+                  SELECT COALESCE(SUM((observed - expected) ^ 2 / NULLIF(expected, 0)), 0) AS chi,
+                         GREATEST(count(*) FILTER (WHERE p > 0) - 1, 0) AS df, max(total) AS total,
+                         COALESCE(SUM(observed) FILTER (WHERE p = 0), 0) AS unplanned,
+                         (SELECT count(*) FROM alloc) AS planned_arms
+                  FROM joined
+                ),
+                crit AS (
+                  SELECT chi, df, total, unplanned, planned_arms,
+                         CASE df WHEN 0 THEN NULL WHEN 1 THEN 6.635 WHEN 2 THEN 9.210 WHEN 3 THEN 11.345 WHEN 4 THEN 13.277 WHEN 5 THEN 15.086 WHEN 6 THEN 16.812
+                              ELSE df * (1 - 2.0 / (9 * df) + 2.326 * sqrt(2.0 / (9 * df))) ^ 3 END AS lim
+                  FROM stat
+                ),
+                verdict AS (
+                  SELECT crit.*,
+                         CASE WHEN COALESCE(total, 0) = 0 THEN NULL
+                              WHEN planned_arms = 0 THEN 2
+                              WHEN unplanned > 0 THEN 1
+                              WHEN total >= 100 AND chi > lim THEN 1 ELSE 0 END AS srm
+                  FROM crit
+                )
+                SELECT COALESCE((srm = 1)::int, 0) AS srm_alert
+                FROM verdict
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              datasource:
+                type: __expr__
+                uid: __expr__
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0.5
+        # A broken check (database down, data source not created yet) must not mark the feature Unhealthy:
+        # both fallbacks resolve to Normal. The rule health in Grafana still shows the error.
+        noDataState: OK
+        execErrState: OK
+        for: 20s
+        isPaused: false
+        labels:
+          flagscope: srm
+          flagsmith_feature: paypal_button
+          flagsmith_environment: Development
+        annotations:
+          summary: Traffic split mismatch (SRM) on the paypal_button experiment
+          description: The observed exposure split differs from the allocation configured in Flagsmith (chi-square, p < 0.01). Do not trust this experiment until the cause is found. Panel "Traffic split check (SRM)" on the Experiment Room dashboard shows the numbers.
+        notification_settings:
+          receiver: flagsmith-feature-health
+          group_wait: 5s
+          group_interval: 1m
+          repeat_interval: 4h

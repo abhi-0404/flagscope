@@ -126,12 +126,23 @@ describe('Experiment Room dashboard JSON', () => {
       }
     });
 
-    it('turns red on any unplanned exposure, but not when the experiment has no allocation yet', () => {
-      const stat = srmSql.filter((q) => /AS srm/.test(q));
-      expect(stat.length).toBe(1);
-      expect(stat[0]).toMatch(
-        /WHEN planned_arms = 0 THEN 0\s+WHEN unplanned > 0 THEN 1\s+WHEN total >= 100 AND chi > lim/
-      );
+    it('uses one shared verdict: no exposures, plan unavailable, red on any unplanned exposure, chi-square', () => {
+      // The stat, bar gauge and table panels all compute the same verdict CTE.
+      const withVerdict = srmSql.filter((q) => /AS srm/.test(q));
+      expect(withVerdict.length).toBe(3);
+      for (const q of withVerdict) {
+        expect(q).toMatch(
+          /CASE WHEN COALESCE\(total, 0\) = 0 THEN NULL\s+WHEN planned_arms = 0 THEN 2\s+WHEN unplanned > 0 THEN 1\s+WHEN total >= 100 AND chi > lim THEN 1 ELSE 0 END AS srm/
+        );
+      }
+    });
+
+    it('maps every verdict state on the SRM stat panel, including "Plan unavailable" and no data', () => {
+      const panel = dashboard.panels.find((p: { title: string }) => p.title === 'Traffic split check (SRM)');
+      const mappings = JSON.stringify(panel.fieldConfig.defaults.mappings);
+      for (const text of ['Split OK', 'SRM DETECTED', 'Plan unavailable', 'No exposures yet']) {
+        expect(mappings).toContain(text);
+      }
     });
 
     it('handles df = 0 (one arm, experiment not started) before the Wilson-Hilferty branch divides by df', () => {

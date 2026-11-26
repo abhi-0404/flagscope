@@ -9,6 +9,8 @@
 //   UPSTREAM_URL         Flagsmith base URL, default http://flagsmith:8000
 //   MASTER_KEY           Flagsmith organisation master API key, OR
 //   MASTER_KEY_FILE      path of a file holding the key (re-read when it changes; the stack bootstrap writes it)
+//   FEATURE_HEALTH_PATH  secret upstream path of the Flagsmith Feature Health webhook (/api/v1/feature-health/<id>/<secret>), OR
+//   FEATURE_HEALTH_PATH_FILE  a file holding it (bootstrap writes it); enables POST /hooks/feature-health, see below
 //   PORT                 listen port, default 8080
 //   HOST                 listen address, default 0.0.0.0
 // Logs: method, path, status only. Keys and query values are never logged.
@@ -36,6 +38,16 @@ export const RULES = [
   { name: 'exposures', method: 'GET', path: new RegExp(`^/api/v1/environments/${ENV_KEY}/experiments/${ID}/exposures/$`), key: true, query: {} },
   { name: 'results-refresh', method: 'POST', path: new RegExp(`^/api/v1/environments/${ENV_KEY}/experiments/${ID}/results/refresh/$`), key: true, query: {} },
 ];
+
+/**
+ * The one extra route, outside the plugin allow-list: POST /hooks/feature-health. Grafana's alert contact point posts
+ * here and the gatekeeper forwards the JSON body to the Flagsmith Feature Health webhook, whose secret path it alone
+ * holds. This keeps the secret out of Grafana: a contact point URL is readable by every Grafana Viewer (including
+ * anonymous ones), the plugin data source routes cannot reach this path, and the port is not published.
+ */
+export const HOOK_PATH = '/hooks/feature-health';
+export const MAX_HOOK_BYTES = 64 * 1024;
+const HOOK_UPSTREAM = /^\/api\/v1\/feature-health\/[A-Za-z0-9_-]{1,200}\/[A-Za-z0-9_-]{1,200}$/;
 
 const MAX_URL_LENGTH = 512;
 /** No route takes a body. A client that keeps streaming one past this many bytes gets its connection closed. */
@@ -110,12 +122,84 @@ export function makeKeySource({ key, file }) {
   };
 }
 
-export function createServer({ upstream, getKey, log = defaultLog, timeoutMs = 30_000 }) {
+export function createServer({ upstream, getKey, getHookPath = () => '', log = defaultLog, timeoutMs = 30_000 }) {
   const base = new URL(upstream);
   const lib = base.protocol === 'https:' ? null : http;
 
+  /** POST /hooks/feature-health: buffer a small JSON body, then forward it to the secret Feature Health path. */
+  function relayHook(req, res) {
+    const chunks = [];
+    let bytes = 0;
+    let tooBig = false;
+    req.on('data', (chunk) => {
+      bytes += chunk.length;
+      if (bytes > MAX_HOOK_BYTES) {
+        tooBig = true;
+        req.socket.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (tooBig) return;
+      const target = getHookPath();
+      if (!target || !HOOK_UPSTREAM.test(target)) {
+        log('POST', HOOK_PATH, 503);
+        send(res, 503, { detail: 'The gatekeeper has no Feature Health webhook configured yet.' });
+        return;
+      }
+      if (!/^application\/json(\s*;|$)/i.test(String(req.headers['content-type'] ?? ''))) {
+        log('POST', HOOK_PATH, 415);
+        send(res, 415, { detail: 'Content-Type must be application/json.' });
+        return;
+      }
+      if (!lib) {
+        log('POST', HOOK_PATH, 502);
+        send(res, 502, { detail: 'https upstream is not supported, put a TLS terminator in front of Flagsmith.' });
+        return;
+      }
+      const body = Buffer.concat(chunks);
+      let up;
+      try {
+        up = lib.request(
+          {
+            hostname: base.hostname,
+            port: base.port || 80,
+            method: 'POST',
+            path: base.pathname.replace(/\/+$/, '') + target,
+            headers: { accept: 'application/json', 'user-agent': 'flagscope-gatekeeper', 'content-type': 'application/json', 'content-length': String(body.length) },
+            timeout: timeoutMs,
+          },
+          (upRes) => {
+            res.writeHead(upRes.statusCode ?? 502, { 'content-type': upRes.headers['content-type'] ?? 'application/json' });
+            upRes.pipe(res);
+            log('POST', HOOK_PATH, upRes.statusCode ?? 502);
+          }
+        );
+      } catch {
+        log('POST', HOOK_PATH, 502);
+        send(res, 502, { detail: 'The gatekeeper could not build the upstream request.' });
+        return;
+      }
+      up.on('timeout', () => up.destroy(new Error('upstream timeout')));
+      up.on('error', () => {
+        if (!res.headersSent) {
+          log('POST', HOOK_PATH, 502);
+          send(res, 502, { detail: 'Flagsmith is unreachable from the gatekeeper.' });
+        } else {
+          res.destroy();
+        }
+      });
+      up.end(body);
+    });
+  }
+
   return http.createServer((req, res) => {
     const method = req.method ?? '';
+    if (method === 'POST' && req.url === HOOK_PATH) {
+      relayHook(req, res);
+      return;
+    }
     // The client body is never forwarded: drain it, but cut off a client that streams an endless one.
     let bodyBytes = 0;
     req.on('data', (chunk) => {
@@ -200,8 +284,9 @@ const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv
 if (isMain) {
   const upstream = process.env.UPSTREAM_URL ?? 'http://flagsmith:8000';
   const getKey = makeKeySource({ key: process.env.MASTER_KEY, file: process.env.MASTER_KEY_FILE });
+  const getHookPath = makeKeySource({ key: process.env.FEATURE_HEALTH_PATH, file: process.env.FEATURE_HEALTH_PATH_FILE });
   const port = Number(process.env.PORT ?? 8080);
-  createServer({ upstream, getKey }).listen(port, process.env.HOST ?? '0.0.0.0', () => {
-    console.log(`flagscope-gatekeeper listening on :${port}, upstream ${new URL(upstream).origin}, ${RULES.length} allow-listed routes`);
+  createServer({ upstream, getKey, getHookPath }).listen(port, process.env.HOST ?? '0.0.0.0', () => {
+    console.log(`flagscope-gatekeeper listening on :${port}, upstream ${new URL(upstream).origin}, ${RULES.length} allow-listed routes + ${HOOK_PATH}`);
   });
 }
