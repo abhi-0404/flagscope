@@ -1,0 +1,5 @@
+{
+  "id": 1,
+  "base_url": "http://grafana.flagscope.local:3000",
+  "api_key": "<redacted>"
+}

@@ -1,0 +1,13 @@
+{
+  "id": 1,
+  "feature": 1,
+  "name": "PayPal button experiment",
+  "hypothesis": "A more prominent PayPal button increases checkout completion",
+  "status": "created",
+  "created_at": "2026-11-25T14:42:40.836807Z",
+  "updated_at": "2026-11-25T14:42:40.873924Z",
+  "started_at": null,
+  "ended_at": null,
+  "rollout_decision": null,
+  "rollout_variant": null
+}

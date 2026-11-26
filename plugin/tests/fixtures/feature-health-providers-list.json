@@ -1,0 +1,8 @@
+[
+  {
+    "created_by": null,
+    "name": "Grafana",
+    "project": 1,
+    "webhook_url": "http://localhost:8000/api/v1/feature-health/ImJiZTIwYmRhOTM0MTRiZTJiYWJiNDliN2U5NTJjNTIzIg/<redacted>"
+  }
+]

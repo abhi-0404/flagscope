@@ -1,0 +1,12 @@
+{
+  "id": "<redacted>",
+  "prefix": "wJxb1eLl",
+  "created": "2026-11-25T14:42:07.537291Z",
+  "name": "flagscope-admin",
+  "revoked": false,
+  "expiry_date": null,
+  "key": "<redacted>",
+  "is_admin": true,
+  "has_expired": false,
+  "created_by": 1
+}

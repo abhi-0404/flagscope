@@ -1,0 +1,15 @@
+{
+  "ci_commit_sha": "5369ece3ff3aefbd021d2496f82a7ce0e9cd04d6",
+  "image_tag": "2.295.2",
+  "has_email_provider": false,
+  "experimentation_enabled": true,
+  "is_enterprise": false,
+  "is_saas": false,
+  "self_hosted_data": {
+    "has_users": false,
+    "has_logins": false
+  },
+  "package_versions": {
+    ".": "2.295.2"
+  }
+}

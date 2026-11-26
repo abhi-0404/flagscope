@@ -1,0 +1,25 @@
+[
+  {
+    "id": 1,
+    "dashboardUID": "",
+    "userUID": "dg5dkbrmdjta8e",
+    "created": 1795619001194,
+    "updated": 1795619001194,
+    "time": 1795618999628,
+    "timeEnd": 1795618999628,
+    "text": "Flag state updated for feature: paypal_button",
+    "tags": [
+      "flagsmith",
+      "project:FlagScope Demo",
+      "environment:Development",
+      "by:system",
+      "feature:paypal_button",
+      "flag:disabled",
+      "Unhealthy"
+    ],
+    "login": "sa-1-flagsmith",
+    "email": "sa-1-flagsmith",
+    "avatarUrl": "/avatar/2e234d43295ddf0188b03d7b29b4f16a1d3e6765c85a05a706ba180c015e937f",
+    "data": {}
+  }
+]

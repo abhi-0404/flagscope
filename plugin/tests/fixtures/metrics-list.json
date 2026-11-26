@@ -1,0 +1,32 @@
+{
+  "metrics": [
+    {
+      "value": 1,
+      "description": "Total features",
+      "name": "total_features",
+      "entity": "features",
+      "rank": 1
+    },
+    {
+      "value": 1,
+      "description": "Features enabled",
+      "name": "enabled_features",
+      "entity": "features",
+      "rank": 2
+    },
+    {
+      "value": 0,
+      "description": "Segment overrides",
+      "name": "segment_overrides",
+      "entity": "segments",
+      "rank": 3
+    },
+    {
+      "value": 0,
+      "description": "Identity overrides",
+      "name": "identity_overrides",
+      "entity": "identities",
+      "rank": 4
+    }
+  ]
+}

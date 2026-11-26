@@ -1,0 +1,7 @@
+.generated/
+.env
+node_modules/
+dist/
+*.log
+.generated-*/
+gatekeeper-secrets/

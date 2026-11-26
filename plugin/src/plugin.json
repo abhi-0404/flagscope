@@ -1,0 +1,73 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "datasource",
+  "name": "FlagScope for Flagsmith",
+  "id": "abhi0404-flagscope-datasource",
+  "metrics": true,
+  "info": {
+    "description": "Experiment results from self-hosted Flagsmith Experimentation inside Grafana: per-variant lift, credible interval and chance to beat control. Read only; the Flagsmith API key never reaches the browser, and behind the bundled gatekeeper proxy Grafana holds no key at all.",
+    "author": {
+      "name": "Abhi0404"
+    },
+    "keywords": [
+      "flagsmith",
+      "experiments",
+      "ab testing",
+      "feature flags",
+      "datasource"
+    ],
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "links": [],
+    "screenshots": [],
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=13.2.0",
+    "plugins": []
+  },
+  "routes": [
+    {
+      "path": "flagsmith/version/",
+      "method": "GET",
+      "url": "{{ .JsonData.flagsmithUrl }}/version/"
+    },
+    {
+      "path": "flagsmith/api/v1/projects/",
+      "method": "GET",
+      "url": "{{ .JsonData.flagsmithUrl }}/api/v1/projects/",
+      "headers": [
+        {
+          "name": "Authorization",
+          "content": "Api-Key {{ .SecureJsonData.apiKey }}"
+        }
+      ]
+    },
+    {
+      "path": "flagsmith/api/v1/environments/",
+      "method": "GET",
+      "url": "{{ .JsonData.flagsmithUrl }}/api/v1/environments/",
+      "headers": [
+        {
+          "name": "Authorization",
+          "content": "Api-Key {{ .SecureJsonData.apiKey }}"
+        }
+      ]
+    },
+    {
+      "path": "flagsmith/api/v1/environments/",
+      "method": "POST",
+      "reqRole": "Admin",
+      "url": "{{ .JsonData.flagsmithUrl }}/api/v1/environments/",
+      "headers": [
+        {
+          "name": "Authorization",
+          "content": "Api-Key {{ .SecureJsonData.apiKey }}"
+        }
+      ]
+    }
+  ]
+}

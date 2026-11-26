@@ -1,0 +1,21 @@
+{
+  "id": 1,
+  "uuid": "9abb65db-0e86-4cd0-936f-6a5e60fcc557",
+  "name": "Development",
+  "api_key": "iVKfD7DrG4H9U6iaNdWfgc",
+  "description": null,
+  "project": 1,
+  "minimum_change_request_approvals": null,
+  "allow_client_traits": true,
+  "banner_text": null,
+  "banner_colour": null,
+  "hide_disabled_flags": null,
+  "use_mv_v2_evaluation": true,
+  "use_identity_composite_key_for_hashing": true,
+  "hide_sensitive_data": false,
+  "use_v2_feature_versioning": false,
+  "use_identity_overrides_in_local_eval": true,
+  "is_creating": false,
+  "metadata": [],
+  "total_segment_overrides": 1
+}

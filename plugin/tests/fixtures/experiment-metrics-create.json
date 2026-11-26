@@ -1,0 +1,14 @@
+{
+  "id": 1,
+  "name": "checkout_completed",
+  "description": "",
+  "aggregation": "occurrence",
+  "direction": "up",
+  "definition": {
+    "version": 1,
+    "event": "checkout_completed"
+  },
+  "experiments": [],
+  "created_at": "2026-11-25T14:42:40.116452Z",
+  "updated_at": "2026-11-25T14:42:40.116462Z"
+}

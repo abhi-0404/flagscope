@@ -1,0 +1,11 @@
+import { call, loadState } from './lib.mjs';
+const st = loadState(); const auth = { apiKey: st.masterKey };
+const X = `/api/v1/environments/${st.envKey}/experiments/${st.experiment}`;
+const d = await call('GET', `${X}/`, { auth, save: 'experiments-detail-created' });
+console.log(JSON.stringify(d.json));
+const s = await call('POST', `${X}/start/`, { auth, save: 'experiments-start' });
+console.log(JSON.stringify(s.json).slice(0, 600));
+await call('GET', `${X}/`, { auth, save: 'experiments-detail-running' });
+await call('GET', `${X}/results/`, { auth, save: 'experiments-results-null' });
+await call('GET', `${X}/exposures/`, { auth, save: 'experiments-exposures-empty' });
+await call('GET', `/api/v1/environments/${st.envKey}/experiments/`, { auth, save: 'experiments-list' });

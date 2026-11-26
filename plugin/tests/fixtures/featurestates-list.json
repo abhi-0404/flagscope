@@ -1,0 +1,36 @@
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 1,
+      "feature_state_value": "control",
+      "multivariate_feature_state_values": [
+        {
+          "id": 1,
+          "multivariate_feature_option": 1,
+          "percentage_allocation": 0
+        },
+        {
+          "id": 3,
+          "multivariate_feature_option": 2,
+          "percentage_allocation": 0
+        }
+      ],
+      "identity": null,
+      "deleted_at": null,
+      "uuid": "b64feb19-0723-4899-85d4-81b85c1c7a98",
+      "enabled": true,
+      "created_at": "2026-11-25T14:42:21.172504Z",
+      "updated_at": "2026-11-25T14:42:21.172521Z",
+      "live_from": "2026-11-25T14:42:21.170545Z",
+      "version": 1,
+      "feature": 1,
+      "environment": 1,
+      "feature_segment": null,
+      "change_request": null,
+      "environment_feature_version": null
+    }
+  ]
+}
